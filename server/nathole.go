@@ -8,10 +8,11 @@ import (
 	"time"
 
 	"github.com/fatedier/frp/models/msg"
-	"github.com/fatedier/frp/utils/errors"
 	"github.com/fatedier/frp/utils/log"
-	"github.com/fatedier/frp/utils/pool"
 	"github.com/fatedier/frp/utils/util"
+
+	"github.com/fatedier/golib/errors"
+	"github.com/fatedier/golib/pool"
 )
 
 // Timeout seconds.
@@ -78,8 +79,8 @@ func (nc *NatHoleController) Run() {
 		}
 
 		switch m := rawMsg.(type) {
-		case *msg.NatHoleVistor:
-			go nc.HandleVistor(m, raddr)
+		case *msg.NatHoleVisitor:
+			go nc.HandleVisitor(m, raddr)
 		case *msg.NatHoleClient:
 			go nc.HandleClient(m, raddr)
 		default:
@@ -96,22 +97,33 @@ func (nc *NatHoleController) GenSid() string {
 	return fmt.Sprintf("%d%s", t, id)
 }
 
-func (nc *NatHoleController) HandleVistor(m *msg.NatHoleVistor, raddr *net.UDPAddr) {
+func (nc *NatHoleController) HandleVisitor(m *msg.NatHoleVisitor, raddr *net.UDPAddr) {
 	sid := nc.GenSid()
 	session := &NatHoleSession{
-		Sid:        sid,
-		VistorAddr: raddr,
-		NotifyCh:   make(chan struct{}, 0),
+		Sid:         sid,
+		VisitorAddr: raddr,
+		NotifyCh:    make(chan struct{}, 0),
 	}
 	nc.mu.Lock()
 	clientCfg, ok := nc.clientCfgs[m.ProxyName]
-	if !ok || m.SignKey != util.GetAuthKey(clientCfg.Sk, m.Timestamp) {
+	if !ok {
 		nc.mu.Unlock()
+		errInfo := fmt.Sprintf("xtcp server for [%s] doesn't exist", m.ProxyName)
+		log.Debug(errInfo)
+		nc.listener.WriteToUDP(nc.GenNatHoleResponse(nil, errInfo), raddr)
 		return
 	}
+	if m.SignKey != util.GetAuthKey(clientCfg.Sk, m.Timestamp) {
+		nc.mu.Unlock()
+		errInfo := fmt.Sprintf("xtcp connection of [%s] auth failed", m.ProxyName)
+		log.Debug(errInfo)
+		nc.listener.WriteToUDP(nc.GenNatHoleResponse(nil, errInfo), raddr)
+		return
+	}
+
 	nc.sessions[sid] = session
 	nc.mu.Unlock()
-	log.Trace("handle vistor message, sid [%s]", sid)
+	log.Trace("handle visitor message, sid [%s]", sid)
 
 	defer func() {
 		nc.mu.Lock()
@@ -129,8 +141,8 @@ func (nc *NatHoleController) HandleVistor(m *msg.NatHoleVistor, raddr *net.UDPAd
 	// Wait client connections.
 	select {
 	case <-session.NotifyCh:
-		resp := nc.GenNatHoleResponse(raddr, session)
-		log.Trace("send nat hole response to vistor")
+		resp := nc.GenNatHoleResponse(session, "")
+		log.Trace("send nat hole response to visitor")
 		nc.listener.WriteToUDP(resp, raddr)
 	case <-time.After(time.Duration(NatHoleTimeout) * time.Second):
 		return
@@ -148,16 +160,27 @@ func (nc *NatHoleController) HandleClient(m *msg.NatHoleClient, raddr *net.UDPAd
 	session.ClientAddr = raddr
 	session.NotifyCh <- struct{}{}
 
-	resp := nc.GenNatHoleResponse(raddr, session)
+	resp := nc.GenNatHoleResponse(session, "")
 	log.Trace("send nat hole response to client")
 	nc.listener.WriteToUDP(resp, raddr)
 }
 
-func (nc *NatHoleController) GenNatHoleResponse(raddr *net.UDPAddr, session *NatHoleSession) []byte {
+func (nc *NatHoleController) GenNatHoleResponse(session *NatHoleSession, errInfo string) []byte {
+	var (
+		sid         string
+		visitorAddr string
+		clientAddr  string
+	)
+	if session != nil {
+		sid = session.Sid
+		visitorAddr = session.VisitorAddr.String()
+		clientAddr = session.ClientAddr.String()
+	}
 	m := &msg.NatHoleResp{
-		Sid:        session.Sid,
-		VistorAddr: session.VistorAddr.String(),
-		ClientAddr: session.ClientAddr.String(),
+		Sid:         sid,
+		VisitorAddr: visitorAddr,
+		ClientAddr:  clientAddr,
+		Error:       errInfo,
 	}
 	b := bytes.NewBuffer(nil)
 	err := msg.WriteMsg(b, m)
@@ -168,9 +191,9 @@ func (nc *NatHoleController) GenNatHoleResponse(raddr *net.UDPAddr, session *Nat
 }
 
 type NatHoleSession struct {
-	Sid        string
-	VistorAddr *net.UDPAddr
-	ClientAddr *net.UDPAddr
+	Sid         string
+	VisitorAddr *net.UDPAddr
+	ClientAddr  *net.UDPAddr
 
 	NotifyCh chan struct{}
 }

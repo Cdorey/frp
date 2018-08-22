@@ -14,65 +14,49 @@
 
 package msg
 
-import (
-	"net"
-	"reflect"
-)
+import "net"
 
 const (
-	TypeLogin             = 'o'
-	TypeLoginResp         = '1'
-	TypeNewProxy          = 'p'
-	TypeNewProxyResp      = '2'
-	TypeCloseProxy        = 'c'
-	TypeNewWorkConn       = 'w'
-	TypeReqWorkConn       = 'r'
-	TypeStartWorkConn     = 's'
-	TypeNewVistorConn     = 'v'
-	TypeNewVistorConnResp = '3'
-	TypePing              = 'h'
-	TypePong              = '4'
-	TypeUdpPacket         = 'u'
-	TypeNatHoleVistor     = 'i'
-	TypeNatHoleClient     = 'n'
-	TypeNatHoleResp       = 'm'
-	TypeNatHoleSid        = '5'
+	TypeLogin              = 'o'
+	TypeLoginResp          = '1'
+	TypeNewProxy           = 'p'
+	TypeNewProxyResp       = '2'
+	TypeCloseProxy         = 'c'
+	TypeNewWorkConn        = 'w'
+	TypeReqWorkConn        = 'r'
+	TypeStartWorkConn      = 's'
+	TypeNewVisitorConn     = 'v'
+	TypeNewVisitorConnResp = '3'
+	TypePing               = 'h'
+	TypePong               = '4'
+	TypeUdpPacket          = 'u'
+	TypeNatHoleVisitor     = 'i'
+	TypeNatHoleClient      = 'n'
+	TypeNatHoleResp        = 'm'
+	TypeNatHoleSid         = '5'
 )
 
 var (
-	TypeMap       map[byte]reflect.Type
-	TypeStringMap map[reflect.Type]byte
-)
-
-func init() {
-	TypeMap = make(map[byte]reflect.Type)
-	TypeStringMap = make(map[reflect.Type]byte)
-
-	TypeMap[TypeLogin] = reflect.TypeOf(Login{})
-	TypeMap[TypeLoginResp] = reflect.TypeOf(LoginResp{})
-	TypeMap[TypeNewProxy] = reflect.TypeOf(NewProxy{})
-	TypeMap[TypeNewProxyResp] = reflect.TypeOf(NewProxyResp{})
-	TypeMap[TypeCloseProxy] = reflect.TypeOf(CloseProxy{})
-	TypeMap[TypeNewWorkConn] = reflect.TypeOf(NewWorkConn{})
-	TypeMap[TypeReqWorkConn] = reflect.TypeOf(ReqWorkConn{})
-	TypeMap[TypeStartWorkConn] = reflect.TypeOf(StartWorkConn{})
-	TypeMap[TypeNewVistorConn] = reflect.TypeOf(NewVistorConn{})
-	TypeMap[TypeNewVistorConnResp] = reflect.TypeOf(NewVistorConnResp{})
-	TypeMap[TypePing] = reflect.TypeOf(Ping{})
-	TypeMap[TypePong] = reflect.TypeOf(Pong{})
-	TypeMap[TypeUdpPacket] = reflect.TypeOf(UdpPacket{})
-	TypeMap[TypeNatHoleVistor] = reflect.TypeOf(NatHoleVistor{})
-	TypeMap[TypeNatHoleClient] = reflect.TypeOf(NatHoleClient{})
-	TypeMap[TypeNatHoleResp] = reflect.TypeOf(NatHoleResp{})
-	TypeMap[TypeNatHoleSid] = reflect.TypeOf(NatHoleSid{})
-
-	for k, v := range TypeMap {
-		TypeStringMap[v] = k
+	msgTypeMap = map[byte]interface{}{
+		TypeLogin:              Login{},
+		TypeLoginResp:          LoginResp{},
+		TypeNewProxy:           NewProxy{},
+		TypeNewProxyResp:       NewProxyResp{},
+		TypeCloseProxy:         CloseProxy{},
+		TypeNewWorkConn:        NewWorkConn{},
+		TypeReqWorkConn:        ReqWorkConn{},
+		TypeStartWorkConn:      StartWorkConn{},
+		TypeNewVisitorConn:     NewVisitorConn{},
+		TypeNewVisitorConnResp: NewVisitorConnResp{},
+		TypePing:               Ping{},
+		TypePong:               Pong{},
+		TypeUdpPacket:          UdpPacket{},
+		TypeNatHoleVisitor:     NatHoleVisitor{},
+		TypeNatHoleClient:      NatHoleClient{},
+		TypeNatHoleResp:        NatHoleResp{},
+		TypeNatHoleSid:         NatHoleSid{},
 	}
-}
-
-// Message wraps socket packages for communicating between frpc and frps.
-type Message interface{}
+)
 
 // When frpc start, client send this message to login to server.
 type Login struct {
@@ -92,7 +76,7 @@ type Login struct {
 type LoginResp struct {
 	Version       string `json:"version"`
 	RunId         string `json:"run_id"`
-	ServerUdpPort int64  `json:"server_udp_port"`
+	ServerUdpPort int    `json:"server_udp_port"`
 	Error         string `json:"error"`
 }
 
@@ -102,25 +86,29 @@ type NewProxy struct {
 	ProxyType      string `json:"proxy_type"`
 	UseEncryption  bool   `json:"use_encryption"`
 	UseCompression bool   `json:"use_compression"`
+	Group          string `json:"group"`
+	GroupKey       string `json:"group_key"`
 
 	// tcp and udp only
-	RemotePort int64 `json:"remote_port"`
+	RemotePort int `json:"remote_port"`
 
 	// http and https only
-	CustomDomains     []string `json:"custom_domains"`
-	SubDomain         string   `json:"subdomain"`
-	Locations         []string `json:"locations"`
-	HostHeaderRewrite string   `json:"host_header_rewrite"`
-	HttpUser          string   `json:"http_user"`
-	HttpPwd           string   `json:"http_pwd"`
+	CustomDomains     []string          `json:"custom_domains"`
+	SubDomain         string            `json:"subdomain"`
+	Locations         []string          `json:"locations"`
+	HttpUser          string            `json:"http_user"`
+	HttpPwd           string            `json:"http_pwd"`
+	HostHeaderRewrite string            `json:"host_header_rewrite"`
+	Headers           map[string]string `json:"headers"`
 
 	// stcp
 	Sk string `json:"sk"`
 }
 
 type NewProxyResp struct {
-	ProxyName string `json:"proxy_name"`
-	Error     string `json:"error"`
+	ProxyName  string `json:"proxy_name"`
+	RemoteAddr string `json:"remote_addr"`
+	Error      string `json:"error"`
 }
 
 type CloseProxy struct {
@@ -138,7 +126,7 @@ type StartWorkConn struct {
 	ProxyName string `json:"proxy_name"`
 }
 
-type NewVistorConn struct {
+type NewVisitorConn struct {
 	ProxyName      string `json:"proxy_name"`
 	SignKey        string `json:"sign_key"`
 	Timestamp      int64  `json:"timestamp"`
@@ -146,7 +134,7 @@ type NewVistorConn struct {
 	UseCompression bool   `json:"use_compression"`
 }
 
-type NewVistorConnResp struct {
+type NewVisitorConnResp struct {
 	ProxyName string `json:"proxy_name"`
 	Error     string `json:"error"`
 }
@@ -163,7 +151,7 @@ type UdpPacket struct {
 	RemoteAddr *net.UDPAddr `json:"r"`
 }
 
-type NatHoleVistor struct {
+type NatHoleVisitor struct {
 	ProxyName string `json:"proxy_name"`
 	SignKey   string `json:"sign_key"`
 	Timestamp int64  `json:"timestamp"`
@@ -175,11 +163,12 @@ type NatHoleClient struct {
 }
 
 type NatHoleResp struct {
-	Sid        string `json:"sid"`
-	VistorAddr string `json:"vistor_addr"`
-	ClientAddr string `json:"client_addr"`
+	Sid         string `json:"sid"`
+	VisitorAddr string `json:"visitor_addr"`
+	ClientAddr  string `json:"client_addr"`
+	Error       string `json:"error"`
 }
 
 type NatHoleSid struct {
-	Sid string `json；"sid"`
+	Sid string `json:"sid"`
 }

@@ -22,15 +22,17 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fatedier/frp/g"
 	"github.com/fatedier/frp/models/config"
 	"github.com/fatedier/frp/models/msg"
 	"github.com/fatedier/frp/models/plugin"
 	"github.com/fatedier/frp/models/proto/udp"
-	"github.com/fatedier/frp/utils/errors"
-	frpIo "github.com/fatedier/frp/utils/io"
 	"github.com/fatedier/frp/utils/log"
 	frpNet "github.com/fatedier/frp/utils/net"
-	"github.com/fatedier/frp/utils/pool"
+
+	"github.com/fatedier/golib/errors"
+	frpIo "github.com/fatedier/golib/io"
+	"github.com/fatedier/golib/pool"
 )
 
 // Proxy defines how to deal with work connections for different proxy type.
@@ -39,14 +41,14 @@ type Proxy interface {
 
 	// InWorkConn accept work connections registered to server.
 	InWorkConn(conn frpNet.Conn)
+
 	Close()
 	log.Logger
 }
 
-func NewProxy(ctl *Control, pxyConf config.ProxyConf) (pxy Proxy) {
+func NewProxy(pxyConf config.ProxyConf) (pxy Proxy) {
 	baseProxy := BaseProxy{
-		ctl:    ctl,
-		Logger: log.NewPrefixLogger(pxyConf.GetName()),
+		Logger: log.NewPrefixLogger(pxyConf.GetBaseInfo().ProxyName),
 	}
 	switch cfg := pxyConf.(type) {
 	case *config.TcpProxyConf:
@@ -84,7 +86,6 @@ func NewProxy(ctl *Control, pxyConf config.ProxyConf) (pxy Proxy) {
 }
 
 type BaseProxy struct {
-	ctl    *Control
 	closed bool
 	mu     sync.RWMutex
 	log.Logger
@@ -116,7 +117,7 @@ func (pxy *TcpProxy) Close() {
 
 func (pxy *TcpProxy) InWorkConn(conn frpNet.Conn) {
 	HandleTcpWorkConnection(&pxy.cfg.LocalSvrConf, pxy.proxyPlugin, &pxy.cfg.BaseProxyConf, conn,
-		[]byte(config.ClientCommonCfg.PrivilegeToken))
+		[]byte(g.GlbClientCfg.Token))
 }
 
 // HTTP
@@ -145,7 +146,7 @@ func (pxy *HttpProxy) Close() {
 
 func (pxy *HttpProxy) InWorkConn(conn frpNet.Conn) {
 	HandleTcpWorkConnection(&pxy.cfg.LocalSvrConf, pxy.proxyPlugin, &pxy.cfg.BaseProxyConf, conn,
-		[]byte(config.ClientCommonCfg.PrivilegeToken))
+		[]byte(g.GlbClientCfg.Token))
 }
 
 // HTTPS
@@ -174,7 +175,7 @@ func (pxy *HttpsProxy) Close() {
 
 func (pxy *HttpsProxy) InWorkConn(conn frpNet.Conn) {
 	HandleTcpWorkConnection(&pxy.cfg.LocalSvrConf, pxy.proxyPlugin, &pxy.cfg.BaseProxyConf, conn,
-		[]byte(config.ClientCommonCfg.PrivilegeToken))
+		[]byte(g.GlbClientCfg.Token))
 }
 
 // STCP
@@ -203,7 +204,7 @@ func (pxy *StcpProxy) Close() {
 
 func (pxy *StcpProxy) InWorkConn(conn frpNet.Conn) {
 	HandleTcpWorkConnection(&pxy.cfg.LocalSvrConf, pxy.proxyPlugin, &pxy.cfg.BaseProxyConf, conn,
-		[]byte(config.ClientCommonCfg.PrivilegeToken))
+		[]byte(g.GlbClientCfg.Token))
 }
 
 // XTCP
@@ -244,7 +245,7 @@ func (pxy *XtcpProxy) InWorkConn(conn frpNet.Conn) {
 		Sid:       natHoleSidMsg.Sid,
 	}
 	raddr, _ := net.ResolveUDPAddr("udp",
-		fmt.Sprintf("%s:%d", config.ClientCommonCfg.ServerAddr, config.ClientCommonCfg.ServerUdpPort))
+		fmt.Sprintf("%s:%d", g.GlbClientCfg.ServerAddr, g.GlbClientCfg.ServerUdpPort))
 	clientConn, err := net.DialUDP("udp", nil, raddr)
 	defer clientConn.Close()
 
@@ -271,25 +272,31 @@ func (pxy *XtcpProxy) InWorkConn(conn frpNet.Conn) {
 	}
 	clientConn.SetReadDeadline(time.Time{})
 	clientConn.Close()
+
+	if natHoleRespMsg.Error != "" {
+		pxy.Error("natHoleRespMsg get error info: %s", natHoleRespMsg.Error)
+		return
+	}
+
 	pxy.Trace("get natHoleRespMsg, sid [%s], client address [%s]", natHoleRespMsg.Sid, natHoleRespMsg.ClientAddr)
 
-	// Send sid to vistor udp address.
+	// Send sid to visitor udp address.
 	time.Sleep(time.Second)
 	laddr, _ := net.ResolveUDPAddr("udp", clientConn.LocalAddr().String())
-	daddr, err := net.ResolveUDPAddr("udp", natHoleRespMsg.VistorAddr)
+	daddr, err := net.ResolveUDPAddr("udp", natHoleRespMsg.VisitorAddr)
 	if err != nil {
-		pxy.Error("resolve vistor udp address error: %v", err)
+		pxy.Error("resolve visitor udp address error: %v", err)
 		return
 	}
 
 	lConn, err := net.DialUDP("udp", laddr, daddr)
 	if err != nil {
-		pxy.Error("dial vistor udp address error: %v", err)
+		pxy.Error("dial visitor udp address error: %v", err)
 		return
 	}
 	lConn.Write([]byte(natHoleRespMsg.Sid))
 
-	kcpConn, err := frpNet.NewKcpConnFromUdp(lConn, true, natHoleRespMsg.VistorAddr)
+	kcpConn, err := frpNet.NewKcpConnFromUdp(lConn, true, natHoleRespMsg.VisitorAddr)
 	if err != nil {
 		pxy.Error("create kcp connection from udp connection error: %v", err)
 		return
@@ -413,9 +420,11 @@ func HandleTcpWorkConnection(localInfo *config.LocalSvrConf, proxyPlugin plugin.
 		err    error
 	)
 	remote = workConn
+
 	if baseInfo.UseEncryption {
 		remote, err = frpIo.WithEncryption(remote, encKey)
 		if err != nil {
+			workConn.Close()
 			workConn.Error("create encryption stream error: %v", err)
 			return
 		}
@@ -427,12 +436,13 @@ func HandleTcpWorkConnection(localInfo *config.LocalSvrConf, proxyPlugin plugin.
 	if proxyPlugin != nil {
 		// if plugin is set, let plugin handle connections first
 		workConn.Debug("handle by plugin: %s", proxyPlugin.Name())
-		proxyPlugin.Handle(remote)
+		proxyPlugin.Handle(remote, workConn)
 		workConn.Debug("handle by plugin finished")
 		return
 	} else {
 		localConn, err := frpNet.ConnectServer("tcp", fmt.Sprintf("%s:%d", localInfo.LocalIp, localInfo.LocalPort))
 		if err != nil {
+			workConn.Close()
 			workConn.Error("connect to local service [%s:%d] error: %v", localInfo.LocalIp, localInfo.LocalPort, err)
 			return
 		}
